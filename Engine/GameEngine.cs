@@ -104,6 +104,7 @@ namespace Engine
         {
             execStatusInit = true;
             Iterate((o) => o.Initialize());
+            AddManagedObject(camera);
 
             base.Initialize();
         }
@@ -146,7 +147,10 @@ namespace Engine
                 Vector2 drawPos, drawScale, worldPos = gameObject.Position;
                 if(drawOnPixelGrid)
                 {
-                    worldPos = Vector2.Round(worldPos * pixelsPerWorldUnit) / pixelsPerWorldUnit;
+                    static Vector2 QuantizePosition(Vector2 pos) => Vector2.Round(pos * pixelsPerWorldUnit) / pixelsPerWorldUnit;
+
+                    worldPos = QuantizePosition(worldPos);
+                    camera.position = QuantizePosition(camera.position);
                 }
                 if(gameObject.usesWorldPos)
                 {

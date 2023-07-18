@@ -10,9 +10,10 @@ namespace Engine
     public class GameEngine : Game
     {
         public static float pixelsPerWorldUnit = 1f;
+        public bool drawOnPixelGrid = false;
 
-        private GraphicsDeviceManager _graphics;
-        private SpriteBatch _spriteBatch;
+        private GraphicsDeviceManager graphics;
+        private SpriteBatch spriteBatch;
         
         protected Camera camera = new();
         SpriteFont font;
@@ -30,7 +31,7 @@ namespace Engine
 
         public GameEngine()
         {
-            _graphics = new GraphicsDeviceManager(this);
+            graphics = new GraphicsDeviceManager(this);
             Content.RootDirectory = "Content";
             IsMouseVisible = true;
         }
@@ -110,16 +111,16 @@ namespace Engine
         protected override void LoadContent()
         {
             execStatusLoad = true;
-            _spriteBatch = new SpriteBatch(GraphicsDevice);
+            spriteBatch = new SpriteBatch(GraphicsDevice);
             font = Content.Load<SpriteFont>("Arial10pt");
         }
 
         protected sealed override void BeginRun()
         {
             if (!execStatusInit)
-                throw new InvalidOperationException("Engine.BeginRun() called before Engine.Initialize(). If Initialize() or LoadContent() are overridden, you MUST invoke the base implementations, e.g. base.Initialize();");
-            else if (!execStatusLoad)
-                throw new InvalidOperationException("Engine.BeginRun() called before Engine.LoadContent(). If LoadContent() is overridden, you MUST invoke the base implementation, e.g. base.LoadContent();");
+                throw new InvalidOperationException("BeginRun() called before Engine.Initialize(). If Initialize() or LoadContent() are overridden, you MUST invoke the base implementations, e.g. base.Initialize();");
+            if (!execStatusLoad)
+                throw new InvalidOperationException("BeginRun() called before LoadContent(). If LoadContent() is overridden, you MUST invoke the base implementation, e.g. base.LoadContent();");
         }
 
         protected sealed override void Update(GameTime gameTime)
@@ -131,24 +132,28 @@ namespace Engine
 
         protected sealed override void Draw(GameTime gameTime)
         {
-            camera.SetWindowBounds(_graphics);
+            camera.SetWindowBounds(graphics);
 
             Iterate((o) => o.DrawUpdate(gameTime));
 
             GraphicsDevice.Clear(Color.CornflowerBlue);
-            _spriteBatch.Begin();
+            spriteBatch.Begin();
             foreach(var gameObject in gameObjects)
             {
                 if (!gameObject.active || !gameObject.visible || gameObject.Texture == null)
                     continue;
 
-                Vector2 drawPos, drawScale;
+                Vector2 drawPos, drawScale, worldPos = gameObject.Position;
+                if(drawOnPixelGrid)
+                {
+                    worldPos = Vector2.Round(worldPos * pixelsPerWorldUnit) / pixelsPerWorldUnit;
+                }
                 if(gameObject.usesWorldPos)
                 {
                     if(!camera.IsOnScreen(gameObject))
                         continue;
 
-                    drawPos = camera.WorldPosToScreenPos(gameObject.Position);
+                    drawPos = camera.WorldPosToScreenPos(worldPos);
                     drawScale = gameObject.Scale * camera.zoom;
                 }
                 else
@@ -156,11 +161,11 @@ namespace Engine
                     drawPos = gameObject.Position;
                     drawScale = gameObject.Scale;
                 }
-                _spriteBatch.Draw(
+                spriteBatch.Draw(
                     gameObject.Texture,
                     drawPos,
                     null,
-                    Color.White,
+                    gameObject.ColorMask,
                     gameObject.Rotation,
                     gameObject.TextureCenter, //origin, relative to top left corner of texture, before rotation and scale
                     drawScale,
@@ -168,8 +173,8 @@ namespace Engine
                     gameObject.zPos
                 );
             }
-            fps.DrawFps(_spriteBatch, font, new Vector2(5f, 5f), Color.Black);
-            _spriteBatch.End();
+            fps.DrawFps(spriteBatch, font, new Vector2(5f, 5f), Color.Black);
+            spriteBatch.End();
 
             base.Draw(gameTime);
         }

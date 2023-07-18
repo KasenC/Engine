@@ -14,6 +14,7 @@ namespace Engine
         public bool active = true, visible = true, usesWorldPos = true;
         public Vector2 Position = new(), Scale = Vector2.One, Center = new();
         public float Rotation = 0f, zPos = 0f;
+        public Color ColorMask = Color.White;
 
         public GameObject Parent { get; private set; } = null;
 

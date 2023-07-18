@@ -1,5 +1,4 @@
 ﻿using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
@@ -79,7 +78,7 @@ namespace Engine
         public Texture2D Texture { get; private set; }
         
         //Object size in world units, with scaling
-        public Vector2 Size
+        public Vector2 ObjectSize
         {
             get
             {
@@ -98,17 +97,17 @@ namespace Engine
         //Texture size in pixels, without scaling
         public Vector2 TextureSize
         {
-            get => new Vector2(Texture.Width, Texture.Height);
+            get => Texture.Bounds.Size.ToVector2();
         }
 
         //Center of the object relative to the top left corner (in its own reference frame) in world units, after scaling
-        public Vector2 ObjectCenter
+        public Vector2 ObjectPivot
         {
-            get => Center * Size; set => Center = value / Size;
+            get => Center * ObjectSize; set => Center = value / ObjectSize;
         }
 
         //Center of the texture from its top left corner in pixels, before scaling
-        public Vector2 TextureCenter
+        public Vector2 TexturePivot
         {
             get => Center * TextureSize; set => Center = value / TextureSize;
         }
@@ -223,7 +222,7 @@ namespace Engine
 
         public bool IsOnScreen(GameObject gameObject)
         {
-            Vector2 TLOffset = gameObject.ObjectCenter, BROffset = gameObject.Size - gameObject.ObjectCenter;
+            Vector2 TLOffset = gameObject.ObjectPivot, BROffset = gameObject.ObjectSize - gameObject.ObjectPivot;
             float maxX = MathF.Max(TLOffset.X, BROffset.X), maxY = MathF.Max(TLOffset.Y, BROffset.Y);
             float maxRadius = WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY);
             Vector2 pos = WorldPosToScreenPos(gameObject.Position);

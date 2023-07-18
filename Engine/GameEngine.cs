@@ -1,6 +1,5 @@
 ﻿using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -171,7 +170,7 @@ namespace Engine
                     null,
                     gameObject.ColorMask,
                     gameObject.Rotation,
-                    gameObject.TextureCenter, //origin, relative to top left corner of texture, before rotation and scale
+                    gameObject.TexturePivot, //origin, relative to top left corner of texture, before rotation and scale
                     drawScale,
                     SpriteEffects.None,
                     gameObject.zPos

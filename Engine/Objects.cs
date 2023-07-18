@@ -8,10 +8,68 @@ namespace Engine
 {
     public enum CenterPos { TopLeft, TopMiddle, TopRight, LeftMiddle, Middle, RightMiddle, BottomLeft, BottomMiddle, BottomRight }
 
-    public class GameObject : IManaged
+    public abstract class ManagedObject
+    {
+        public virtual void Initialize() { }
+
+        public virtual void Update(GameTime gameTime) { }
+
+        public virtual void DrawUpdate(GameTime gameTime) { }
+    }
+
+    public class Script<T> : ManagedObject where T : ScriptableObject<T>
+    {
+        public T owningObject;
+    }
+
+    public class ScriptableObject<T> : ManagedObject where T: ScriptableObject<T>
+    {
+        public bool active = true;
+
+        private List<ManagedObject> _scripts = new();
+        public List<ManagedObject> Scripts
+        {
+            get => new(_scripts);
+        }
+
+        public void AddScript(Script<T> script)
+        {
+            _scripts.Add(script);
+            script.owningObject = (T)this;
+        }
+
+        public override void Initialize()
+        {
+            if (!active)
+                return;
+
+            foreach (var script in _scripts)
+                script.Initialize();
+        }
+
+        public override void Update(GameTime gameTime)
+        {
+            if (!active)
+                return;
+
+            foreach (var script in _scripts)
+                script.Update(gameTime);
+        }
+
+        public override void DrawUpdate(GameTime gameTime)
+        {
+            if (!active)
+                return;
+
+            foreach (var script in _scripts)
+                script.DrawUpdate(gameTime);
+        }
+    }
+
+    public class GameObject : ScriptableObject<GameObject>
     {
 
-        public bool active = true, visible = true, usesWorldPos = true;
+        public bool visible = true, usesWorldPos = true;
         public Vector2 Position = new(), Scale = Vector2.One, Center = new();
         public float Rotation = 0f, zPos = 0f;
         public Color ColorMask = Color.White;
@@ -78,22 +136,10 @@ namespace Engine
             }
         }
 
-        private List<IManaged> _scripts = new();
-        public List<IManaged> Scripts
-        {
-            get => new(_scripts);
-        }
-
         private List<GameObject> _children = new();
         public List<GameObject> Children
         {
             get => new(_children);
-        }
-
-        public void AddScript(Script script)
-        {
-            _scripts.Add(script);
-            script.gameObject = this;
         }
 
         internal void AddChild(GameObject child)
@@ -145,32 +191,54 @@ namespace Engine
         //Constructor is internal to enforce GameObject creation through GameEngine
         internal GameObject() { }
 
-        public void Initialize()
-        {
-            if (!active)
-                return;
-
-            foreach (var script in _scripts)
-                script.Initialize();
-        }
-
-        public void Update(GameTime gameTime)
-        {
-            if (!active)
-                return;
-
-            foreach (var script in _scripts)
-                script.Update(gameTime);
-        }
-
-        public void DrawUpdate(GameTime gameTime)
-        {
-            if (!active)
-                return;
-
-            foreach (var script in _scripts)
-                script.DrawUpdate(gameTime);
-        }
     }
 
+    public class Camera : ScriptableObject<Camera>
+    {
+        public Vector2 position;
+        public float zoom = 1f;
+
+        //Size of game window (screen space)
+        public Vector2 WindowBounds { get; private protected set; }
+
+        //Size of area displayed by camera (world space)
+        public Vector2 ViewPortSize { get => WindowBounds / WorldScaleToScreenScale; }
+
+        //Zoom camera so that the viewport is width units wide (world space)
+        public void SetViewPortWidth(float width)
+        {
+            zoom = width * GameEngine.pixelsPerWorldUnit / WindowBounds.X;
+        }
+
+        //Zoom camera so that the viewport is height units tall (world space)
+        public void SetViewPortHeight(float height)
+        {
+            zoom = height * GameEngine.pixelsPerWorldUnit / WindowBounds.Y;
+        }
+
+        internal void SetWindowBounds(GraphicsDeviceManager _graphics)
+        {
+            WindowBounds = new(_graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+        }
+
+        public bool IsOnScreen(GameObject gameObject)
+        {
+            Vector2 TLOffset = gameObject.ObjectCenter, BROffset = gameObject.Size - gameObject.ObjectCenter;
+            float maxX = MathF.Max(TLOffset.X, BROffset.X), maxY = MathF.Max(TLOffset.Y, BROffset.Y);
+            float maxRadius = WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY);
+            Vector2 pos = WorldPosToScreenPos(gameObject.Position);
+
+            return pos.X + maxRadius >= 0f && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
+        }
+
+        public Vector2 WorldPosToScreenPos(Vector2 worldPos)
+        {
+            return (worldPos - position) * WorldScaleToScreenScale + WindowBounds / 2f;
+        }
+
+        public float WorldScaleToScreenScale
+        {
+            get => zoom * GameEngine.pixelsPerWorldUnit;
+        }
+    }
 }

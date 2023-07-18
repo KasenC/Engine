@@ -9,10 +9,10 @@ namespace Engine
 {
     public class GameEngine : Game
     {
-        public static float pixelsPerWorldUnit = 1f;
+        public static float pixelsPerWorldUnit { get; protected set; } = 1f;
         public bool drawOnPixelGrid = false;
 
-        private GraphicsDeviceManager graphics;
+        protected GraphicsDeviceManager graphics;
         private SpriteBatch spriteBatch;
         
         protected Camera camera = new();
@@ -20,7 +20,7 @@ namespace Engine
 
         private List<GameObject> gameObjects = new(), objectsToRemove = new();
         private List<Tuple<GameObject, GameObject>> objectsToAdd = new();
-        private List<IManaged> managedObjects = new(), managedObjectsToRemove = new(), managedObjectsToAdd = new();
+        private List<ManagedObject> managedObjects = new(), managedObjectsToRemove = new(), managedObjectsToAdd = new();
 
         //Execution status flags
         private bool execStatusInit = false, execStatusLoad = false, 
@@ -74,7 +74,7 @@ namespace Engine
         /// <summary>
         /// Note: non-GameObject managed objects will be updated after GameObjects.
         /// </summary>
-        public void AddManagedObject(IManaged managedObject)
+        public void AddManagedObject(ManagedObject managedObject)
         {
             if(!LockObjLists)
             {
@@ -88,7 +88,7 @@ namespace Engine
             }
         }
 
-        public void RemoveManagedObject(IManaged managedObject)
+        public void RemoveManagedObject(ManagedObject managedObject)
         {
             if(!LockObjLists)
             {
@@ -179,14 +179,14 @@ namespace Engine
             base.Draw(gameTime);
         }
 
-        private void Iterate(Action<IManaged> action)
+        private void Iterate(Action<ManagedObject> action)
         {
             LockObjLists = true;
             foreach (GameObject gameObject in gameObjects)
             {
                 action(gameObject);
             }
-            foreach (IManaged managedObject in managedObjects)
+            foreach (ManagedObject managedObject in managedObjects)
             {
                 action(managedObject);
             }
@@ -216,61 +216,120 @@ namespace Engine
         }
     }
 
-    public class Camera
+    public enum Side { Top, Right, Bottom, Left }
+
+    public struct Rect
     {
-        public Vector2 position;
-        public float zoom = 1f;
+        public float Top = 0f, Left = 0f, Bottom = 0f, Right = 0f;
 
-        //Size of game window (screen space)
-        public Vector2 WindowBounds { get; private protected set; }
-
-        //Size of area displayed by camera (world space)
-        public Vector2 ViewPortSize { get => WindowBounds / WorldScaleToScreenScale; }
-
-        //Zoom camera so that the viewport is width units wide (world space)
-        public void SetViewPortWidth(float width)
+        public float X
         {
-            zoom = width * GameEngine.pixelsPerWorldUnit / WindowBounds.X;
+            get => Left;
+            set
+            {
+                float w = Width;
+                Left = value;
+                Right = value + w;
+            }
         }
 
-        //Zoom camera so that the viewport is height units tall (world space)
-        public void SetViewPortHeight(float height)
+        public float Y
         {
-            zoom = height * GameEngine.pixelsPerWorldUnit / WindowBounds.Y;
+            get => Top;
+            set
+            {
+                float h = Height;
+                Top = value;
+                Bottom = value + h;
+            }
         }
 
-        internal void SetWindowBounds(GraphicsDeviceManager _graphics)
+        public float Width
         {
-            WindowBounds = new(_graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+            get => Right - Left;
+            set => Right = Left + value;
         }
 
-        public bool IsOnScreen(GameObject gameObject)
+        public float Height
         {
-            Vector2 TLOffset = gameObject.ObjectCenter, BROffset = gameObject.Size - gameObject.ObjectCenter;
-            float maxX = MathF.Max(TLOffset.X, BROffset.X), maxY = MathF.Max(TLOffset.Y, BROffset.Y);
-            float maxRadius = WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY);
-            Vector2 pos = WorldPosToScreenPos(gameObject.Position);
-            
-            return pos.X + maxRadius >= 0f && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
+            get => Bottom - Top;
+            set => Bottom = Top + value;
         }
 
-        public Vector2 WorldPosToScreenPos(Vector2 worldPos)
+        public Vector2 Location
         {
-            return (worldPos - position) * WorldScaleToScreenScale + WindowBounds / 2f;
+            get => new Vector2(X, Y);
+            set
+            {
+                X = value.X;
+                Y = value.Y;
+            }
         }
 
-        public float WorldScaleToScreenScale
+        public Vector2 Size
         {
-            get => zoom * GameEngine.pixelsPerWorldUnit;
+            get => new Vector2(Width, Height);
+            set
+            {
+                Width = value.X;
+                Height = value.Y;
+            }
         }
-    }
 
-    public interface IManaged
-    {
-        public void Initialize();
+        public float Area
+        {
+            get => Width * Height;
+        }
 
-        public void Update(GameTime gameTime);
+        public Rect(Vector2 location, Vector2 size)
+        {
+            Location = location;
+            Size = size;
+        }
 
-        public void DrawUpdate(GameTime gameTime);
+        public Rect(float X, float Y, float Width, float Height)
+        {
+            this.X = X;
+            this.Y = Y;
+            this.Width = Width;
+            this.Height = Height;
+        }
+
+        public Rect Intersect(Rect rect)
+        {
+            return Intersect(rect, out _);
+        }
+
+        public Rect Intersect(Rect rect, out bool intersects)
+        {
+            Rect intersect = new()
+            {
+                Top = MathF.Max(Top, rect.Top),
+                Bottom = MathF.Min(Bottom, rect.Bottom),
+                Left = MathF.Max(Left, rect.Left),
+                Right = MathF.Min(Right, rect.Right)
+            };
+            intersects = intersect.Height > 0f && intersect.Width > 0f;
+            return intersect;
+        }
+
+        public bool Intersects(Rect rect)
+        {
+            Intersect(rect, out bool intersects);
+            return intersects;
+        }
+
+        public float GetSide(Side side)
+        {
+            if (side == Side.Top)
+                return Top;
+            if (side == Side.Bottom)
+                return Bottom;
+            if (side == Side.Left)
+                return Left;
+            if (side == Side.Right)
+                return Right;
+            throw new ArgumentException();
+        }
     }
 }

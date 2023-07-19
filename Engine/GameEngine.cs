@@ -1,21 +1,30 @@
 ﻿using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Linq;
 
 namespace Engine
 {
     public class GameEngine : Game
     {
+        //Settings
         public static float pixelsPerWorldUnit { get; protected set; } = 1f;
         public bool drawOnPixelGrid = false;
+        public bool enableFpsCounter = true;
 
-        protected GraphicsDeviceManager graphics;
+        //Internals
         private SpriteBatch spriteBatch;
+        protected GraphicsDeviceManager graphics;
         
         protected Camera camera = new();
+        protected internal ControlManager controls;
+
         SpriteFont font;
+        SimpleFps fps = new();
 
         private List<GameObject> gameObjects = new(), objectsToRemove = new();
         private List<Tuple<GameObject, GameObject>> objectsToAdd = new();
@@ -25,12 +34,10 @@ namespace Engine
         private bool execStatusInit = false, execStatusLoad = false, 
             LockObjLists = false;
 
-        public bool enableFpsCounter = true;
-        SimpleFps fps = new();
-
         public GameEngine()
         {
             graphics = new GraphicsDeviceManager(this);
+            controls = new ControlManager(camera);
             Content.RootDirectory = "Content";
             IsMouseVisible = true;
         }
@@ -42,14 +49,15 @@ namespace Engine
             return gameObject;
         }
 
-        public void AddGameObject(GameObject gameObject, GameObject parent)
+        internal void AddGameObject(GameObject gameObject, GameObject parent)
         {
+            gameObject.Engine = this;
             if (!LockObjLists)
             {
                 parent?.AddChild(gameObject);
                 gameObjects.Add(gameObject);
                 if(execStatusInit)
-                    gameObject.Initialize();
+                    gameObject.InternalInitialize();
             }
             else
             {
@@ -57,12 +65,12 @@ namespace Engine
             }
         }
 
-        public void RemoveGameObject(GameObject gameObject)
+        public void DestroyGameObject(GameObject gameObject)
         {
             if(!LockObjLists)
             {
                 gameObjects.Remove(gameObject);
-                gameObject.Parent?.RemoveChild(gameObject);
+                gameObject.InternalDestroy();
             }
             else
             {
@@ -75,11 +83,12 @@ namespace Engine
         /// </summary>
         public void AddManagedObject(ManagedObject managedObject)
         {
+            managedObject.Engine = this;
             if(!LockObjLists)
             {
                 managedObjects.Add(managedObject);
                 if (execStatusInit)
-                    managedObject.Initialize();
+                    managedObject.InternalInitialize();
             }
             else
             {
@@ -87,11 +96,12 @@ namespace Engine
             }
         }
 
-        public void RemoveManagedObject(ManagedObject managedObject)
+        public void DestroyManagedObject(ManagedObject managedObject)
         {
             if(!LockObjLists)
             {
                 managedObjects.Remove(managedObject);
+                managedObject.InternalDestroy();
             }
             else
             {
@@ -102,7 +112,7 @@ namespace Engine
         protected override void Initialize()
         {
             execStatusInit = true;
-            Iterate((o) => o.Initialize());
+            Iterate((o) => o.InternalInitialize());
             AddManagedObject(camera);
 
             base.Initialize();
@@ -125,7 +135,8 @@ namespace Engine
 
         protected sealed override void Update(GameTime gameTime)
         {
-            Iterate((o) => o.Update(gameTime));
+            controls.Update();
+            Iterate((o) => o.InternalUpdate(gameTime));
             fps.Update(gameTime);
             base.Update(gameTime);
         }
@@ -134,7 +145,7 @@ namespace Engine
         {
             camera.SetWindowBounds(graphics);
 
-            Iterate((o) => o.DrawUpdate(gameTime));
+            Iterate((o) => o.InternalDrawUpdate(gameTime));
 
             GraphicsDevice.Clear(Color.CornflowerBlue);
             spriteBatch.Begin();
@@ -202,7 +213,7 @@ namespace Engine
             objectsToAdd.Clear();
             foreach (var gameObject in objectsToRemove)
             {
-                RemoveGameObject(gameObject);
+                DestroyGameObject(gameObject);
             }
             objectsToRemove.Clear();
 
@@ -213,7 +224,7 @@ namespace Engine
             managedObjectsToAdd.Clear();
             foreach (var managed in managedObjectsToRemove)
             {
-                RemoveManagedObject(managed);
+                DestroyManagedObject(managed);
             }
             managedObjectsToRemove.Clear();
         }
@@ -332,7 +343,131 @@ namespace Engine
                 return Left;
             if (side == Side.Right)
                 return Right;
-            throw new ArgumentException();
+            throw new InvalidEnumArgumentException();
         }
+    }
+
+    public abstract class Control
+    {
+        private bool previousState;
+        
+        /// <summary>
+        /// true during the first update cycle when the Control switches to State true
+        /// </summary>
+        public bool Pressed { get; private set; }
+        
+        /// <summary>
+        /// true during the first update cycle when the Control switches to State false
+        /// </summary>
+        public bool Released { get; private set; }
+
+        public abstract bool State { get; }
+
+        internal void Update()
+        {
+            bool currentState = State;
+            if(currentState != previousState)
+            {
+                Pressed = currentState;
+                Released = !currentState;
+            }
+            else
+            {
+                Pressed = false;
+                Released = false;
+            }
+            previousState = currentState;
+        }
+    }
+
+    public class KeyControl : Control
+    {
+        protected List<Keys> keys;
+
+        public KeyControl(Keys key)
+        {
+            keys = new() { key };
+        }
+
+        public KeyControl(List<Keys> keys)
+        {
+            this.keys = keys;
+        }
+
+        public override bool State { get => Keyboard.GetState().GetPressedKeys().Any(x => keys.Contains(x)); }
+    }
+
+    public enum MouseButton { Left, Middle, Right }
+
+    public class MouseButtonControl : Control
+    {
+        protected MouseButton button;
+
+        public MouseButtonControl(MouseButton button)
+        {
+            this.button = button;
+        }
+
+        public override bool State
+        {
+            get
+            {
+                if (button == MouseButton.Left)
+                    return Mouse.GetState().LeftButton == ButtonState.Pressed;
+                if (button == MouseButton.Middle)
+                    return Mouse.GetState().MiddleButton == ButtonState.Pressed;
+                if (button == MouseButton.Right)
+                    return Mouse.GetState().RightButton == ButtonState.Pressed;
+                return false;
+            }
+        }
+    }
+
+    public class ControlManager
+    {
+        protected Dictionary<int, Control> controls = new();
+        protected Camera camera;
+
+        public Vector2 MousePos => Mouse.GetState().Position.ToVector2();
+
+        public Vector2 MouseWorldPos => camera.ScreenPosToWorldPos(MousePos);
+
+        public ControlManager(Camera camera)
+        {
+            this.camera = camera;
+        }
+
+        internal void Update()
+        {
+            foreach (Control control in controls.Values)
+                control.Update();
+        }
+
+        public void Add<T>(T id, Control control) where T : Enum
+        {
+            controls[Convert.ToInt32(id)] = control;
+        }
+
+        public Control Get<T>(T id) where T : Enum
+        {
+            controls.TryGetValue(Convert.ToInt32(id), out Control control);
+            return control;
+        }
+
+        public bool GetState<T>(T id) where T : Enum
+        {
+            return Get(id)?.State ?? false;
+        }
+
+        public bool GetReleased<T>(T id) where T : Enum
+        {
+            return Get(id)?.Released ?? false;
+        }
+
+        public bool GetPressed<T>(T id) where T : Enum
+        {
+            return Get(id)?.Pressed ?? false;
+        }
+
     }
 }

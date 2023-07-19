@@ -9,16 +9,62 @@ namespace Engine
 
     public abstract class ManagedObject
     {
+        internal GameEngine Engine { protected private get; set; }
+
+        internal virtual void InternalInitialize() 
+        {
+            Initialize();
+        }
+
+        internal virtual void InternalUpdate(GameTime gameTime)
+        {
+            Update(gameTime);
+        }
+
+        internal virtual void InternalDrawUpdate(GameTime gameTime) 
+        {
+            DrawUpdate(gameTime);
+        }
+
+        internal virtual void InternalDestroy()
+        {
+            Destroy();
+        }
+
         public virtual void Initialize() { }
 
         public virtual void Update(GameTime gameTime) { }
 
         public virtual void DrawUpdate(GameTime gameTime) { }
+
+        public virtual void Destroy() { }
+
+        protected ControlManager Controls => Engine.controls;
+
+        protected GameObject CreateGameObject()
+        {
+            if (Engine == null)
+                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
+            return Engine.CreateGameObject();
+        }
+
+        protected void RemoveGameObject(GameObject gameObject)
+        {
+            if (Engine == null)
+                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
+            Engine.DestroyGameObject(gameObject);
+        }
     }
 
     public class Script<T> : ManagedObject where T : ScriptableObject<T>
     {
-        public T owningObject;
+        public T OwningObject;
+
+        internal override void InternalDestroy()
+        {
+            base.InternalDestroy();
+            OwningObject = null;
+        }
     }
 
     public class ScriptableObject<T> : ManagedObject where T: ScriptableObject<T>
@@ -33,41 +79,49 @@ namespace Engine
 
         public void AddScript(Script<T> script)
         {
+            script.Engine = Engine;
             _scripts.Add(script);
-            script.owningObject = (T)this;
+            script.OwningObject = (T)this;
         }
 
-        public override void Initialize()
+        internal override void InternalInitialize()
         {
             if (!active)
                 return;
-
+            base.InternalInitialize();
             foreach (var script in _scripts)
-                script.Initialize();
+                script.InternalInitialize();
         }
 
-        public override void Update(GameTime gameTime)
+        internal override void InternalUpdate(GameTime gameTime)
         {
             if (!active)
                 return;
-
+            base.InternalUpdate(gameTime);
             foreach (var script in _scripts)
-                script.Update(gameTime);
+                script.InternalUpdate(gameTime);
         }
 
-        public override void DrawUpdate(GameTime gameTime)
+        internal override void InternalDrawUpdate(GameTime gameTime)
         {
             if (!active)
                 return;
-
+            base.InternalDrawUpdate(gameTime);
             foreach (var script in _scripts)
-                script.DrawUpdate(gameTime);
+                script.InternalDrawUpdate(gameTime);
+        }
+
+        internal override void InternalDestroy()
+        {
+            base.InternalDestroy();
+            foreach (var script in _scripts)
+                script.InternalDestroy();
+            _scripts.Clear();
         }
     }
 
     public class GameObject : ScriptableObject<GameObject>
     {
-
         public bool visible = true, usesWorldPos = true;
         public Vector2 Position = new(), Scale = Vector2.One, Center = new();
         public float Rotation = 0f, zPos = 0f;
@@ -77,7 +131,9 @@ namespace Engine
 
         public Texture2D Texture { get; private set; }
         
-        //Object size in world units, with scaling
+        /// <summary>
+        /// Object size in world units, with scaling
+        /// </summary>
         public Vector2 ObjectSize
         {
             get
@@ -94,23 +150,30 @@ namespace Engine
             }
         }
 
-        //Texture size in pixels, without scaling
-        public Vector2 TextureSize
-        {
-            get => Texture.Bounds.Size.ToVector2();
-        }
+        /// <summary>
+        /// Texture size in pixels, without scaling
+        /// </summary>
+        public Vector2 TextureSize { get => Texture.Bounds.Size.ToVector2(); }
 
-        //Center of the object relative to the top left corner (in its own reference frame) in world units, after scaling
-        public Vector2 ObjectPivot
-        {
-            get => Center * ObjectSize; set => Center = value / ObjectSize;
-        }
+        /// <summary>
+        /// Center of the object relative to the top left corner (in its own reference frame) in world units, after scaling
+        /// </summary>
+        public Vector2 ObjectPivot { get => Center * ObjectSize; set => Center = value / ObjectSize; }
 
-        //Center of the texture from its top left corner in pixels, before scaling
-        public Vector2 TexturePivot
-        {
-            get => Center * TextureSize; set => Center = value / TextureSize;
-        }
+        /// <summary>
+        /// Center of the texture from its top left corner in pixels, before scaling
+        /// </summary>
+        public Vector2 TexturePivot { get => Center * TextureSize; set => Center = value / TextureSize; }
+
+        /// <summary>
+        /// Rect representing the bounds of the object in world units, before rotation, after scaling, centered at the pivot
+        /// </summary>
+        public Rect ObjectBounds { get => new Rect(-ObjectPivot, ObjectSize); }
+
+        /// <summary>
+        /// Rect representing the bounds of the texture in pixels, before rotation and scaling, centered at the pivot
+        /// </summary>
+        public Rect TextureBounds { get => new Rect(-TexturePivot, TextureSize); }
 
         public CenterPos CenterPos
         { 
@@ -140,6 +203,10 @@ namespace Engine
         {
             get => new(_children);
         }
+
+        //Constructor is internal to enforce GameObject creation through GameEngine
+        internal GameObject()
+        { }
 
         internal void AddChild(GameObject child)
         {
@@ -174,22 +241,13 @@ namespace Engine
             CenterPos = center;
         }
 
-        /*
-        public void SetTexture(string textureName, Vector2 size, Vector2 center, bool absoluteCenter = false)
+        internal override void InternalDestroy()
         {
-            
-            SetLoadFunc(textureName, (texture) => SetupTexture(texture, size, center, absoluteCenter));
+            base.InternalDestroy();
+            foreach (var child in Children)
+                RemoveChild(child);
+            Parent?.RemoveChild(this);
         }
-
-        public void SetTexture(string textureName, Vector2? size = null, CenterPos center = CenterPos.TopLeft)
-        {
-            SetLoadFunc(textureName, (texture) => SetupTexture(texture, size, center));
-        }
-        */
-
-        //Constructor is internal to enforce GameObject creation through GameEngine
-        internal GameObject() { }
-
     }
 
     public class Camera : ScriptableObject<Camera>
@@ -222,12 +280,18 @@ namespace Engine
 
         public bool IsOnScreen(GameObject gameObject)
         {
-            Vector2 TLOffset = gameObject.ObjectPivot, BROffset = gameObject.ObjectSize - gameObject.ObjectPivot;
-            float maxX = MathF.Max(TLOffset.X, BROffset.X), maxY = MathF.Max(TLOffset.Y, BROffset.Y);
+            Rect bounds = gameObject.ObjectBounds;
+            float maxX = MathF.Max(MathF.Abs(bounds.Left), MathF.Abs(bounds.Right)),
+                maxY = MathF.Max(MathF.Abs(bounds.Top), MathF.Abs(bounds.Bottom));
             float maxRadius = WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY);
             Vector2 pos = WorldPosToScreenPos(gameObject.Position);
 
             return pos.X + maxRadius >= 0f && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
+        }
+
+        public float WorldScaleToScreenScale
+        {
+            get => zoom * GameEngine.pixelsPerWorldUnit;
         }
 
         public Vector2 WorldPosToScreenPos(Vector2 worldPos)
@@ -235,9 +299,9 @@ namespace Engine
             return (worldPos - position) * WorldScaleToScreenScale + WindowBounds / 2f;
         }
 
-        public float WorldScaleToScreenScale
+        public Vector2 ScreenPosToWorldPos(Vector2 screenPos)
         {
-            get => zoom * GameEngine.pixelsPerWorldUnit;
+            return (screenPos - WindowBounds / 2f) / WorldScaleToScreenScale + position;
         }
     }
 }

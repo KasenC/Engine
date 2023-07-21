@@ -48,11 +48,25 @@ namespace Engine
             return Engine.CreateGameObject();
         }
 
-        protected void RemoveGameObject(GameObject gameObject)
+        protected void DestroyGameObject(GameObject gameObject)
         {
             if (Engine == null)
                 throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
             Engine.DestroyGameObject(gameObject);
+        }
+
+        protected void AddManagedObject(ManagedObject managedObject)
+        {
+            if (Engine == null)
+                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
+            Engine.AddManagedObject(managedObject);
+        }
+
+        protected void DestroyManagedObject(ManagedObject managedObject)
+        {
+            if (Engine == null)
+                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
+            Engine.DestroyManagedObject(managedObject);
         }
     }
 
@@ -140,13 +154,13 @@ namespace Engine
             {
                 if (Texture == null)
                     return Vector2.Zero;
-                return Scale * Texture.Bounds.Size.ToVector2() / GameEngine.pixelsPerWorldUnit;
+                return Scale * TextureSize / GameEngine.pixelsPerWorldUnit;
             }
             set
             {
                 if (Texture == null)
                     throw new NullReferenceException("Attempted to set size with null texture");
-                Scale = value / (Texture.Bounds.Size.ToVector2() / GameEngine.pixelsPerWorldUnit);
+                Scale = value / (TextureSize / GameEngine.pixelsPerWorldUnit);
             }
         }
 
@@ -256,10 +270,10 @@ namespace Engine
         public float zoom = 1f;
 
         //Size of game window (screen space)
-        public Vector2 WindowBounds { get; private protected set; }
+        public Point WindowBounds { get; private protected set; }
 
         //Size of area displayed by camera (world space)
-        public Vector2 ViewPortSize { get => WindowBounds / WorldScaleToScreenScale; }
+        public Vector2 ViewPortSize { get => WindowBounds.ToVector2() / WorldScaleToScreenScale; }
 
         //Zoom camera so that the viewport is width units wide (world space)
         public void SetViewPortWidth(float width)
@@ -278,15 +292,20 @@ namespace Engine
             WindowBounds = new(_graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
         }
 
+        public bool IsOnScreen(Point screenPos)
+        {
+            return screenPos.X >= 0 && screenPos.Y >= 0 && screenPos.X <= WindowBounds.X && screenPos.Y <= WindowBounds.Y;
+        }
+
         public bool IsOnScreen(GameObject gameObject)
         {
             Rect bounds = gameObject.ObjectBounds;
             float maxX = MathF.Max(MathF.Abs(bounds.Left), MathF.Abs(bounds.Right)),
                 maxY = MathF.Max(MathF.Abs(bounds.Top), MathF.Abs(bounds.Bottom));
-            float maxRadius = WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY);
-            Vector2 pos = WorldPosToScreenPos(gameObject.Position);
+            int maxRadius = (int)MathF.Ceiling(WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY));
+            Point pos = WorldPosToScreenPos(gameObject.Position);
 
-            return pos.X + maxRadius >= 0f && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
+            return pos.X + maxRadius >= 0 && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
         }
 
         public float WorldScaleToScreenScale
@@ -294,14 +313,14 @@ namespace Engine
             get => zoom * GameEngine.pixelsPerWorldUnit;
         }
 
-        public Vector2 WorldPosToScreenPos(Vector2 worldPos)
+        public Point WorldPosToScreenPos(Vector2 worldPos)
         {
-            return (worldPos - position) * WorldScaleToScreenScale + WindowBounds / 2f;
+            return Vector2.Round((worldPos - position) * WorldScaleToScreenScale).ToPoint() + WindowBounds / new Point(2);
         }
 
-        public Vector2 ScreenPosToWorldPos(Vector2 screenPos)
+        public Vector2 ScreenPosToWorldPos(Point screenPos)
         {
-            return (screenPos - WindowBounds / 2f) / WorldScaleToScreenScale + position;
+            return (screenPos - WindowBounds / new Point(2)).ToVector2() / WorldScaleToScreenScale + position;
         }
     }
 }

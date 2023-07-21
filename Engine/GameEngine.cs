@@ -19,8 +19,7 @@ namespace Engine
         //Internals
         private SpriteBatch spriteBatch;
         protected GraphicsDeviceManager graphics;
-        
-        protected Camera camera = new();
+        protected internal Camera camera = new();
         protected internal ControlManager controls;
 
         SpriteFont font;
@@ -37,7 +36,7 @@ namespace Engine
         public GameEngine()
         {
             graphics = new GraphicsDeviceManager(this);
-            controls = new ControlManager(camera);
+            controls = new ControlManager(this);
             Content.RootDirectory = "Content";
             IsMouseVisible = true;
         }
@@ -149,25 +148,26 @@ namespace Engine
 
             GraphicsDevice.Clear(Color.CornflowerBlue);
             spriteBatch.Begin();
-            foreach(var gameObject in gameObjects)
+
+            static Vector2 QuantizePosition(Vector2 pos) => Vector2.Round(pos * pixelsPerWorldUnit) / pixelsPerWorldUnit;
+            if(drawOnPixelGrid)
+                camera.position = QuantizePosition(camera.position);
+
+            foreach (var gameObject in gameObjects)
             {
                 if (!gameObject.active || !gameObject.visible || gameObject.Texture == null)
                     continue;
 
-                Vector2 drawPos, drawScale, worldPos = gameObject.Position;
-                if(drawOnPixelGrid)
-                {
-                    static Vector2 QuantizePosition(Vector2 pos) => Vector2.Round(pos * pixelsPerWorldUnit) / pixelsPerWorldUnit;
-
-                    worldPos = QuantizePosition(worldPos);
-                    camera.position = QuantizePosition(camera.position);
-                }
+                Vector2 drawPos, drawScale;
                 if(gameObject.usesWorldPos)
                 {
                     if(!camera.IsOnScreen(gameObject))
                         continue;
 
-                    drawPos = camera.WorldPosToScreenPos(worldPos);
+                    Vector2 worldPos = gameObject.Position;
+                    if (drawOnPixelGrid)
+                        worldPos = QuantizePosition(worldPos);
+                    drawPos = camera.WorldPosToScreenPos(worldPos).ToVector2();
                     drawScale = gameObject.Scale * camera.zoom;
                 }
                 else
@@ -309,6 +309,9 @@ namespace Engine
             this.Height = Height;
         }
 
+        public Rect(Rect rect):this(rect.Location, rect.Size)
+        { }
+
         public Rect Intersect(Rect rect)
         {
             return Intersect(rect, out _);
@@ -344,6 +347,12 @@ namespace Engine
             if (side == Side.Right)
                 return Right;
             throw new InvalidEnumArgumentException();
+        }
+
+        public void Offset(Vector2 amount)
+        {
+            X += amount.X;
+            Y += amount.Y;
         }
     }
 
@@ -402,16 +411,21 @@ namespace Engine
     public class MouseButtonControl : Control
     {
         protected MouseButton button;
+        internal Func<bool> onScreenCheck;
 
         public MouseButtonControl(MouseButton button)
         {
             this.button = button;
         }
 
+        private bool MouseIsOnScreen => onScreenCheck?.Invoke() ?? true;
+
         public override bool State
         {
             get
             {
+                if (!MouseIsOnScreen)
+                    return false;
                 if (button == MouseButton.Left)
                     return Mouse.GetState().LeftButton == ButtonState.Pressed;
                 if (button == MouseButton.Middle)
@@ -426,15 +440,15 @@ namespace Engine
     public class ControlManager
     {
         protected Dictionary<int, Control> controls = new();
-        protected Camera camera;
+        protected GameEngine engine;
 
-        public Vector2 MousePos => Mouse.GetState().Position.ToVector2();
+        public Point MousePos => Mouse.GetState().Position;
 
-        public Vector2 MouseWorldPos => camera.ScreenPosToWorldPos(MousePos);
+        public Vector2 MouseWorldPos => engine.camera.ScreenPosToWorldPos(MousePos);
 
-        public ControlManager(Camera camera)
+        public ControlManager(GameEngine engine)
         {
-            this.camera = camera;
+            this.engine = engine;
         }
 
         internal void Update()
@@ -443,9 +457,20 @@ namespace Engine
                 control.Update();
         }
 
+        public bool MouseIsOnScreen()
+        {
+            return engine.camera.IsOnScreen(MousePos);
+        }
+
         public void Add<T>(T id, Control control) where T : Enum
         {
             controls[Convert.ToInt32(id)] = control;
+        }
+
+        public void Add<T>(T id, MouseButtonControl mouseControl) where T : Enum
+        {
+            mouseControl.onScreenCheck = MouseIsOnScreen;
+            Add(id, (Control)mouseControl);
         }
 
         public Control Get<T>(T id) where T : Enum
@@ -456,17 +481,17 @@ namespace Engine
 
         public bool GetState<T>(T id) where T : Enum
         {
-            return Get(id)?.State ?? false;
+            return engine.IsActive && (Get(id)?.State ?? false);
         }
 
         public bool GetReleased<T>(T id) where T : Enum
         {
-            return Get(id)?.Released ?? false;
+            return engine.IsActive && (Get(id)?.Released ?? false);
         }
 
         public bool GetPressed<T>(T id) where T : Enum
         {
-            return Get(id)?.Pressed ?? false;
+            return engine.IsActive && (Get(id)?.Pressed ?? false);
         }
 
     }

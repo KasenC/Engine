@@ -9,7 +9,7 @@ using System.Linq;
 
 namespace Engine
 {
-    public class GameEngine : Game
+    public class GameEngine : Game, IGameObjectManager
     {
         //Settings
         public static float pixelsPerWorldUnit { get; protected set; } = 1f;
@@ -19,15 +19,17 @@ namespace Engine
         //Internals
         private SpriteBatch spriteBatch;
         protected GraphicsDeviceManager graphics;
-        protected internal Camera camera = new();
+        protected internal Camera camera;
         protected internal ControlManager controls;
 
         SpriteFont font;
         SimpleFps fps = new();
 
-        private List<GameObject> gameObjects = new(), objectsToRemove = new();
-        private List<Tuple<GameObject, GameObject>> objectsToAdd = new();
-        private List<ManagedObject> managedObjects = new(), managedObjectsToRemove = new(), managedObjectsToAdd = new();
+        private List<GameObject> gameObjects = new();
+        private SortedSet<ManagedObject> managedObjects = new();
+        private List<ManagedObject> managedObjectsToRemove = new(), managedObjectsToAdd = new();
+
+        GameEngine IManager<ManagedObject>.Engine => this;
 
         //Execution status flags
         private bool execStatusInit = false, execStatusLoad = false, 
@@ -41,58 +43,28 @@ namespace Engine
             IsMouseVisible = true;
         }
 
-        public GameObject CreateGameObject(GameObject parent = null)
+        void IGameObjectManager.AddGameObject(GameObject gameObject)
         {
-            GameObject gameObject = new();
-            AddGameObject(gameObject, parent);
-            return gameObject;
-        }
-
-        internal void AddGameObject(GameObject gameObject, GameObject parent)
-        {
-            gameObject.Engine = this;
-            if (!LockObjLists)
-            {
-                parent?.AddChild(gameObject);
-                gameObjects.Add(gameObject);
-                if(execStatusInit)
-                    gameObject.InternalInitialize();
-            }
-            else
-            {
-                objectsToAdd.Add(new(gameObject, parent));
-            }
+            gameObjects.Add(gameObject);
         }
 
         public void DestroyGameObject(GameObject gameObject)
         {
-            if(!LockObjLists)
-            {
-                gameObjects.Remove(gameObject);
-                gameObject.InternalDestroy();
-            }
-            else
-            {
-                objectsToRemove.Add(gameObject);
-            }
+            gameObjects.Remove(gameObject);
+            DestroyManagedObject(gameObject);
         }
 
-        /// <summary>
-        /// Note: non-GameObject managed objects will be updated after GameObjects.
-        /// </summary>
-        public void AddManagedObject(ManagedObject managedObject)
+        private void AddManagedObject(ManagedObject managedObject)
         {
-            managedObject.Engine = this;
-            if(!LockObjLists)
-            {
+            if (!LockObjLists)
                 managedObjects.Add(managedObject);
-                if (execStatusInit)
-                    managedObject.InternalInitialize();
-            }
             else
-            {
                 managedObjectsToAdd.Add(managedObject);
-            }
+        }
+
+        void IManager<ManagedObject>.AddManaged(ManagedObject managedObject)
+        {
+            AddManagedObject(managedObject);
         }
 
         public void DestroyManagedObject(ManagedObject managedObject)
@@ -111,9 +83,7 @@ namespace Engine
         protected override void Initialize()
         {
             execStatusInit = true;
-            Iterate((o) => o.InternalInitialize());
-            AddManagedObject(camera);
-
+            camera = new Camera(this);
             base.Initialize();
         }
 
@@ -153,38 +123,39 @@ namespace Engine
             if(drawOnPixelGrid)
                 camera.position = QuantizePosition(camera.position);
 
-            foreach (var gameObject in gameObjects)
+            foreach (var gameObject in gameObjects.OrderBy(x => x.drawOrder))
             {
                 if (!gameObject.active || !gameObject.visible || gameObject.Texture == null)
                     continue;
 
                 Vector2 drawPos, drawScale;
-                if(gameObject.usesWorldPos)
+                if(gameObject.drawUsesWorldPos)
                 {
                     if(!camera.IsOnScreen(gameObject))
                         continue;
 
-                    Vector2 worldPos = gameObject.Position;
+                    Vector2 worldPos = gameObject.WorldPos;
                     if (drawOnPixelGrid)
                         worldPos = QuantizePosition(worldPos);
                     drawPos = camera.WorldPosToScreenPos(worldPos).ToVector2();
-                    drawScale = gameObject.Scale * camera.zoom;
+                    drawScale = gameObject.WorldScale * camera.zoom;
                 }
                 else
                 {
-                    drawPos = gameObject.Position;
-                    drawScale = gameObject.Scale;
+                    drawPos = gameObject.WorldPos;
+                    drawScale = gameObject.WorldScale;
                 }
+                Vector2 visiblePortionOffset = gameObject.TexturePixelVisiblePortion?.Location.ToVector2() ?? Vector2.Zero;
                 spriteBatch.Draw(
                     gameObject.Texture,
                     drawPos,
-                    null,
+                    gameObject.TexturePixelVisiblePortion,
                     gameObject.ColorMask,
-                    gameObject.Rotation,
-                    gameObject.TexturePivot, //origin, relative to top left corner of texture, before rotation and scale
+                    gameObject.WorldRotation,
+                    gameObject.TexturePixelPivot - visiblePortionOffset, //origin, relative to top left corner of texture, before rotation and scale
                     drawScale,
                     SpriteEffects.None,
-                    gameObject.zPos
+                    0f
                 );
             }
             fps.DrawFps(spriteBatch, font, new Vector2(5f, 5f), Color.Black);
@@ -196,26 +167,11 @@ namespace Engine
         private void Iterate(Action<ManagedObject> action)
         {
             LockObjLists = true;
-            foreach (GameObject gameObject in gameObjects)
-            {
-                action(gameObject);
-            }
             foreach (ManagedObject managedObject in managedObjects)
             {
                 action(managedObject);
             }
             LockObjLists = false;
-
-            foreach (var (gameObject, parent) in objectsToAdd)
-            {
-                AddGameObject(gameObject, parent);
-            }
-            objectsToAdd.Clear();
-            foreach (var gameObject in objectsToRemove)
-            {
-                DestroyGameObject(gameObject);
-            }
-            objectsToRemove.Clear();
 
             foreach (var managed in managedObjectsToAdd)
             {
@@ -353,6 +309,27 @@ namespace Engine
         {
             X += amount.X;
             Y += amount.Y;
+        }
+
+        public Rectangle ToRectangle()
+        {
+            return new Rectangle(Vector2.Round(Location).ToPoint(), Vector2.Round(Size).ToPoint());
+        }
+
+        /// <summary>
+        /// Returns a new Rect with Location and Size scaled
+        /// </summary>
+        public Rect ScaleAll(float scale)
+        {
+            return new Rect(Location * scale, Size * scale);
+        }
+
+        /// <summary>
+        /// Return a new Rect with Location and Size scaled
+        /// </summary>
+        public Rect ScaleAll(Vector2 scale)
+        {
+            return new Rect(Location * scale, Size * scale);
         }
     }
 

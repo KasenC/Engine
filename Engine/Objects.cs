@@ -1,5 +1,4 @@
 ﻿using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 
@@ -7,13 +6,35 @@ namespace Engine
 {
     public enum CenterPos { TopLeft, TopMiddle, TopRight, LeftMiddle, Middle, RightMiddle, BottomLeft, BottomMiddle, BottomRight }
 
-    public abstract class ManagedObject
+    public interface IManager<T> where T: ManagedObjectBase<T>
     {
-        internal GameEngine Engine { protected private get; set; }
+        internal void AddManaged(T managedObject);
 
-        internal virtual void InternalInitialize() 
+        internal GameEngine Engine { get; }
+    }
+
+    public interface IGameObjectManager: IManager<ManagedObject>
+    {
+        internal void AddGameObject(GameObject gameObject);
+    }
+
+    public abstract class ManagedObjectBase<T> : IComparable<ManagedObjectBase<T>> where T: ManagedObjectBase<T>
+    {
+        /// <summary>
+        /// Higher value = later update
+        /// </summary>
+        private readonly float updateOrder;
+        internal readonly uint internalId;
+        private static uint nextInternalId;
+
+        private protected readonly GameEngine engine;
+
+        public ManagedObjectBase(IManager<T> manager, float updateOrder = 0f)
         {
-            Initialize();
+            internalId = nextInternalId++;
+            this.updateOrder = updateOrder;
+            engine = manager.Engine;
+            manager.AddManaged((T)this);
         }
 
         internal virtual void InternalUpdate(GameTime gameTime)
@@ -31,48 +52,59 @@ namespace Engine
             Destroy();
         }
 
-        public virtual void Initialize() { }
+        protected virtual void Update(GameTime gameTime) { }
 
-        public virtual void Update(GameTime gameTime) { }
+        protected virtual void DrawUpdate(GameTime gameTime) { }
 
-        public virtual void DrawUpdate(GameTime gameTime) { }
+        protected virtual void Destroy() { }
 
-        public virtual void Destroy() { }
+        protected ControlManager Controls => engine.controls;
 
-        protected ControlManager Controls => Engine.controls;
-
-        protected GameObject CreateGameObject()
-        {
-            if (Engine == null)
-                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
-            return Engine.CreateGameObject();
-        }
+        protected IGameObjectManager Manager => engine;
 
         protected void DestroyGameObject(GameObject gameObject)
         {
-            if (Engine == null)
-                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
-            Engine.DestroyGameObject(gameObject);
+            engine.DestroyGameObject(gameObject);
         }
-
-        protected void AddManagedObject(ManagedObject managedObject)
-        {
-            if (Engine == null)
-                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
-            Engine.AddManagedObject(managedObject);
-        }
-
         protected void DestroyManagedObject(ManagedObject managedObject)
         {
-            if (Engine == null)
-                throw new InvalidOperationException("engine reference has not been set. This ManagedObject may be being used improperly.");
-            Engine.DestroyManagedObject(managedObject);
+            engine.DestroyManagedObject(managedObject);
+        }
+
+        public int CompareTo(ManagedObjectBase<T> obj)
+        {
+            int updatePriorityComparison = updateOrder.CompareTo(obj.updateOrder);
+            if (updatePriorityComparison != 0)
+                return updatePriorityComparison;
+
+            return internalId.CompareTo(obj.internalId);
+        }
+
+        protected static float TimeStep(GameTime gameTime)
+        {
+            return (float)gameTime.ElapsedGameTime.TotalSeconds;
+        }
+
+        protected U ContentLoad<U>(string name)
+        {
+            return engine.Content.Load<U>(name);
         }
     }
 
-    public class Script<T> : ManagedObject where T : ScriptableObject<T>
+    public class ManagedObject: ManagedObjectBase<ManagedObject>
     {
-        public T OwningObject;
+        public ManagedObject(IManager<ManagedObject> engine, float updateOrder = 0f):base(engine, updateOrder)
+        { }
+    }
+
+    public class Script<T> : ManagedObjectBase<Script<T>> where T : ScriptableObject<T>
+    {
+        public T OwningObject { get; internal set; }
+
+        /// <param name="scriptUpdateOrder">Only determines update order between scripts on the owning object. Overall update order is determined by object update order.</param>
+        public Script(T owningObject, float scriptUpdateOrder = 0f): base(owningObject, scriptUpdateOrder)
+        {
+        }
 
         internal override void InternalDestroy()
         {
@@ -81,30 +113,25 @@ namespace Engine
         }
     }
 
-    public class ScriptableObject<T> : ManagedObject where T: ScriptableObject<T>
+    public class ScriptableObject<T> : ManagedObject, IManager<Script<T>> where T: ScriptableObject<T>
     {
         public bool active = true;
 
-        private List<ManagedObject> _scripts = new();
-        public List<ManagedObject> Scripts
+        private SortedSet<Script<T>> _scripts = new();
+        public List<Script<T>> Scripts
         {
             get => new(_scripts);
         }
 
-        public void AddScript(Script<T> script)
+        GameEngine IManager<Script<T>>.Engine => engine;
+
+        public ScriptableObject(IManager<ManagedObject> engine, float updateOrder = 0): base(engine, updateOrder)
+        { }
+
+        void IManager<Script<T>>.AddManaged(Script<T> script)
         {
-            script.Engine = Engine;
             _scripts.Add(script);
             script.OwningObject = (T)this;
-        }
-
-        internal override void InternalInitialize()
-        {
-            if (!active)
-                return;
-            base.InternalInitialize();
-            foreach (var script in _scripts)
-                script.InternalInitialize();
         }
 
         internal override void InternalUpdate(GameTime gameTime)
@@ -134,136 +161,6 @@ namespace Engine
         }
     }
 
-    public class GameObject : ScriptableObject<GameObject>
-    {
-        public bool visible = true, usesWorldPos = true;
-        public Vector2 Position = new(), Scale = Vector2.One, Center = new();
-        public float Rotation = 0f, zPos = 0f;
-        public Color ColorMask = Color.White;
-
-        public GameObject Parent { get; private set; } = null;
-
-        public Texture2D Texture { get; private set; }
-        
-        /// <summary>
-        /// Object size in world units, with scaling
-        /// </summary>
-        public Vector2 ObjectSize
-        {
-            get
-            {
-                if (Texture == null)
-                    return Vector2.Zero;
-                return Scale * TextureSize / GameEngine.pixelsPerWorldUnit;
-            }
-            set
-            {
-                if (Texture == null)
-                    throw new NullReferenceException("Attempted to set size with null texture");
-                Scale = value / (TextureSize / GameEngine.pixelsPerWorldUnit);
-            }
-        }
-
-        /// <summary>
-        /// Texture size in pixels, without scaling
-        /// </summary>
-        public Vector2 TextureSize { get => Texture.Bounds.Size.ToVector2(); }
-
-        /// <summary>
-        /// Center of the object relative to the top left corner (in its own reference frame) in world units, after scaling
-        /// </summary>
-        public Vector2 ObjectPivot { get => Center * ObjectSize; set => Center = value / ObjectSize; }
-
-        /// <summary>
-        /// Center of the texture from its top left corner in pixels, before scaling
-        /// </summary>
-        public Vector2 TexturePivot { get => Center * TextureSize; set => Center = value / TextureSize; }
-
-        /// <summary>
-        /// Rect representing the bounds of the object in world units, before rotation, after scaling, centered at the pivot
-        /// </summary>
-        public Rect ObjectBounds { get => new Rect(-ObjectPivot, ObjectSize); }
-
-        /// <summary>
-        /// Rect representing the bounds of the texture in pixels, before rotation and scaling, centered at the pivot
-        /// </summary>
-        public Rect TextureBounds { get => new Rect(-TexturePivot, TextureSize); }
-
-        public CenterPos CenterPos
-        { 
-            set {
-                float x, y;
-
-                if (value == CenterPos.TopLeft || value == CenterPos.LeftMiddle || value == CenterPos.BottomLeft)
-                    x = 0f;
-                else if (value == CenterPos.TopMiddle || value == CenterPos.Middle || value == CenterPos.BottomMiddle)
-                    x = 0.5f;
-                else
-                    x = 1f;
-
-                if (value == CenterPos.TopLeft || value == CenterPos.TopMiddle || value == CenterPos.TopRight)
-                    y = 0f;
-                else if (value == CenterPos.LeftMiddle || value == CenterPos.Middle || value == CenterPos.RightMiddle)
-                    y = 0.5f;
-                else
-                    y = 1f;
-
-                Center = new Vector2(x, y);
-            }
-        }
-
-        private List<GameObject> _children = new();
-        public List<GameObject> Children
-        {
-            get => new(_children);
-        }
-
-        //Constructor is internal to enforce GameObject creation through GameEngine
-        internal GameObject()
-        { }
-
-        internal void AddChild(GameObject child)
-        {
-            child.Parent?.RemoveChild(child);
-            _children.Add(child);
-        }
-
-        internal void RemoveChild(GameObject child)
-        {
-            if (child.Parent == this)
-            {
-                child.Parent = null;
-            }
-            if (_children.Contains(child))
-            {
-                _children.Remove(child);
-            }
-        }
-
-        public void SetTexture(Texture2D texture, Vector2? center = null, Vector2? scale = null)
-        {
-            Texture = texture;
-            if(scale.HasValue)
-                Scale = scale.Value;
-            if(center != null)
-                Center = center.Value;
-        }
-
-        public void SetTexture(Texture2D texture, CenterPos center, Vector2? scale = null)
-        {
-            SetTexture(texture, null, scale);
-            CenterPos = center;
-        }
-
-        internal override void InternalDestroy()
-        {
-            base.InternalDestroy();
-            foreach (var child in Children)
-                RemoveChild(child);
-            Parent?.RemoveChild(this);
-        }
-    }
-
     public class Camera : ScriptableObject<Camera>
     {
         public Vector2 position;
@@ -274,6 +171,9 @@ namespace Engine
 
         //Size of area displayed by camera (world space)
         public Vector2 ViewPortSize { get => WindowBounds.ToVector2() / WorldScaleToScreenScale; }
+
+        public Camera(IManager<ManagedObject> engine, float updateOrder = 0f):base(engine, updateOrder)
+        { }
 
         //Zoom camera so that the viewport is width units wide (world space)
         public void SetViewPortWidth(float width)
@@ -299,11 +199,11 @@ namespace Engine
 
         public bool IsOnScreen(GameObject gameObject)
         {
-            Rect bounds = gameObject.ObjectBounds;
+            Rect bounds = gameObject.WorldBounds;
             float maxX = MathF.Max(MathF.Abs(bounds.Left), MathF.Abs(bounds.Right)),
                 maxY = MathF.Max(MathF.Abs(bounds.Top), MathF.Abs(bounds.Bottom));
             int maxRadius = (int)MathF.Ceiling(WorldScaleToScreenScale * MathF.Sqrt(maxX * maxX + maxY * maxY));
-            Point pos = WorldPosToScreenPos(gameObject.Position);
+            Point pos = WorldPosToScreenPos(gameObject.WorldPos);
 
             return pos.X + maxRadius >= 0 && pos.X - maxRadius <= WindowBounds.X && pos.Y + maxRadius >= 0 && pos.Y - maxRadius <= WindowBounds.Y;
         }

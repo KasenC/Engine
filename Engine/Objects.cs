@@ -1,4 +1,5 @@
 ﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Content;
 using System;
 using System.Collections.Generic;
 
@@ -6,35 +7,57 @@ namespace Engine
 {
     public enum CenterPos { TopLeft, TopMiddle, TopRight, LeftMiddle, Middle, RightMiddle, BottomLeft, BottomMiddle, BottomRight }
 
-    public interface IManager<T> where T: ManagedObjectBase<T>
+    public interface IManager
+    {
+        internal void AddManaged(ManagedObject managedObject);
+
+        internal void DeleteManaged(ManagedObject managedObject);
+
+        public ControlManager Controls { get; }
+
+        public ContentManager Content { get; }
+    }
+
+    public interface IManager<T> : IManager
     {
         internal void AddManaged(T managedObject);
 
-        internal GameEngine Engine { get; }
+        internal void DeleteManaged(T managedObject);
     }
 
-    public interface IGameObjectManager: IManager<ManagedObject>
-    {
-        internal void AddGameObject(GameObject gameObject);
-    }
-
-    public abstract class ManagedObjectBase<T> : IComparable<ManagedObjectBase<T>> where T: ManagedObjectBase<T>
+    public abstract class ManagedObject : IComparable<ManagedObject>
     {
         /// <summary>
         /// Higher value = later update
         /// </summary>
-        private readonly float updateOrder;
+        public readonly float updateOrder;
         internal readonly uint internalId;
         private static uint nextInternalId;
 
-        private protected readonly GameEngine engine;
+        protected readonly IManager manager;
 
-        public ManagedObjectBase(IManager<T> manager, float updateOrder = 0f)
+        public ManagedObject(IManager manager, float updateOrder = 0f)
         {
             internalId = nextInternalId++;
             this.updateOrder = updateOrder;
-            engine = manager.Engine;
-            manager.AddManaged((T)this);
+            this.manager = manager;
+            AddToManager();
+        }
+
+        public void Delete()
+        {
+            DeleteFromManager();
+            InternalOnDestroy();
+        }
+
+        private protected virtual void AddToManager()
+        {
+            manager.AddManaged(this);
+        }
+
+        private protected virtual void DeleteFromManager()
+        {
+            manager.DeleteManaged(this);
         }
 
         internal virtual void InternalUpdate(GameTime gameTime)
@@ -47,31 +70,20 @@ namespace Engine
             DrawUpdate(gameTime);
         }
 
-        internal virtual void InternalDestroy()
+        internal virtual void InternalOnDestroy()
         {
-            Destroy();
+            OnDestroy();
         }
 
         protected virtual void Update(GameTime gameTime) { }
 
         protected virtual void DrawUpdate(GameTime gameTime) { }
 
-        protected virtual void Destroy() { }
+        protected virtual void OnDestroy() { }
 
-        protected ControlManager Controls => engine.controls;
+        protected ControlManager Controls => manager.Controls;
 
-        protected IGameObjectManager Manager => engine;
-
-        protected void DestroyGameObject(GameObject gameObject)
-        {
-            engine.DestroyGameObject(gameObject);
-        }
-        protected void DestroyManagedObject(ManagedObject managedObject)
-        {
-            engine.DestroyManagedObject(managedObject);
-        }
-
-        public int CompareTo(ManagedObjectBase<T> obj)
+        public int CompareTo(ManagedObject obj)
         {
             int updatePriorityComparison = updateOrder.CompareTo(obj.updateOrder);
             if (updatePriorityComparison != 0)
@@ -85,53 +97,68 @@ namespace Engine
             return (float)gameTime.ElapsedGameTime.TotalSeconds;
         }
 
-        protected U ContentLoad<U>(string name)
+        protected T ContentLoad<T>(string name)
         {
-            return engine.Content.Load<U>(name);
+            return manager.Content.Load<T>(name);
         }
     }
 
-    public class ManagedObject: ManagedObjectBase<ManagedObject>
-    {
-        public ManagedObject(IManager<ManagedObject> engine, float updateOrder = 0f):base(engine, updateOrder)
-        { }
-    }
-
-    public class Script<T> : ManagedObjectBase<Script<T>> where T : ScriptableObject<T>
+    public class Script<T> : ManagedObject where T : ScriptableObject
     {
         public T OwningObject { get; internal set; }
 
         /// <param name="scriptUpdateOrder">Only determines update order between scripts on the owning object. Overall update order is determined by object update order.</param>
         public Script(T owningObject, float scriptUpdateOrder = 0f): base(owningObject, scriptUpdateOrder)
         {
+            OwningObject = owningObject;
         }
 
-        internal override void InternalDestroy()
+        internal override void InternalOnDestroy()
         {
-            base.InternalDestroy();
+            base.InternalOnDestroy();
             OwningObject = null;
         }
     }
 
-    public class ScriptableObject<T> : ManagedObject, IManager<Script<T>> where T: ScriptableObject<T>
+    public class ScriptableObject : ManagedObject, IManager
     {
         public bool active = true;
 
-        private SortedSet<Script<T>> _scripts = new();
-        public List<Script<T>> Scripts
-        {
-            get => new(_scripts);
-        }
+        private readonly SortedSet<ManagedObject> scripts = new();
+        private readonly List<ManagedObject> scriptsToAdd = new(), scriptsToRemove = new();
+        private bool lockObjectList = false;
 
-        GameEngine IManager<Script<T>>.Engine => engine;
+        ControlManager IManager.Controls => manager.Controls;
 
-        public ScriptableObject(IManager<ManagedObject> engine, float updateOrder = 0): base(engine, updateOrder)
+        ContentManager IManager.Content => manager.Content;
+
+        public ScriptableObject(IManager engine, float updateOrder = 0): base(engine, updateOrder)
         { }
 
-        void IManager<Script<T>>.AddManaged(Script<T> script)
+        private void AddManagedObject(ManagedObject managedObject)
         {
-            _scripts.Add(script);
-            script.OwningObject = (T)this;
+            if (!lockObjectList)
+                scripts.Add(managedObject);
+            else
+                scriptsToAdd.Add(managedObject);
+        }
+
+        void IManager.AddManaged(ManagedObject managedObject)
+        {
+            AddManagedObject(managedObject);
+        }
+
+        private void DeleteManagedObject(ManagedObject managedObject)
+        {
+            if (!lockObjectList)
+                scripts.Remove(managedObject);
+            else
+                scriptsToRemove.Add(managedObject);
+        }
+
+        void IManager.DeleteManaged(ManagedObject managedObject)
+        {
+            DeleteManagedObject(managedObject);
         }
 
         internal override void InternalUpdate(GameTime gameTime)
@@ -139,8 +166,7 @@ namespace Engine
             if (!active)
                 return;
             base.InternalUpdate(gameTime);
-            foreach (var script in _scripts)
-                script.InternalUpdate(gameTime);
+            Iterate(x => x.InternalUpdate(gameTime));
         }
 
         internal override void InternalDrawUpdate(GameTime gameTime)
@@ -148,20 +174,38 @@ namespace Engine
             if (!active)
                 return;
             base.InternalDrawUpdate(gameTime);
-            foreach (var script in _scripts)
-                script.InternalDrawUpdate(gameTime);
+            Iterate(x => x.InternalDrawUpdate(gameTime));
         }
 
-        internal override void InternalDestroy()
+        internal override void InternalOnDestroy()
         {
-            base.InternalDestroy();
-            foreach (var script in _scripts)
-                script.InternalDestroy();
-            _scripts.Clear();
+            base.InternalOnDestroy();
+            Iterate(x => x.Delete());
+        }
+
+        private void Iterate(Action<ManagedObject> action)
+        {
+            lockObjectList = true;
+            foreach (ManagedObject managedObject in scripts)
+            {
+                action(managedObject);
+            }
+            lockObjectList = false;
+
+            foreach (var managed in scriptsToAdd)
+            {
+                AddManagedObject(managed);
+            }
+            scriptsToAdd.Clear();
+            foreach (var managed in scriptsToRemove)
+            {
+                DeleteManagedObject(managed);
+            }
+            scriptsToRemove.Clear();
         }
     }
 
-    public class Camera : ScriptableObject<Camera>
+    public class Camera : ScriptableObject
     {
         public Vector2 position;
         public float zoom = 1f;

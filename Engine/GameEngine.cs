@@ -9,7 +9,7 @@ using System.Linq;
 
 namespace Engine
 {
-    public class GameEngine : Game, IGameObjectManager
+    public class GameEngine : Game, IManager<GameObject>
     {
         //Settings
         public static float pixelsPerWorldUnit { get; protected set; } = 1f;
@@ -25,15 +25,13 @@ namespace Engine
         SpriteFont font;
         SimpleFps fps = new();
 
-        private List<GameObject> gameObjects = new();
-        private SortedSet<ManagedObject> managedObjects = new();
-        private List<ManagedObject> managedObjectsToRemove = new(), managedObjectsToAdd = new();
-
-        GameEngine IManager<ManagedObject>.Engine => this;
+        private readonly List<GameObject> gameObjects = new();
+        private readonly SortedSet<ManagedObject> managedObjects = new();
+        private readonly List<ManagedObject> managedObjectsToRemove = new(), managedObjectsToAdd = new();
 
         //Execution status flags
         private bool execStatusInit = false, execStatusLoad = false, 
-            LockObjLists = false;
+            lockObjLists = false;
 
         public GameEngine()
         {
@@ -43,41 +41,42 @@ namespace Engine
             IsMouseVisible = true;
         }
 
-        void IGameObjectManager.AddGameObject(GameObject gameObject)
-        {
-            gameObjects.Add(gameObject);
-        }
-
-        public void DestroyGameObject(GameObject gameObject)
-        {
-            gameObjects.Remove(gameObject);
-            DestroyManagedObject(gameObject);
-        }
-
         private void AddManagedObject(ManagedObject managedObject)
         {
-            if (!LockObjLists)
+            if (!lockObjLists)
                 managedObjects.Add(managedObject);
             else
                 managedObjectsToAdd.Add(managedObject);
         }
 
-        void IManager<ManagedObject>.AddManaged(ManagedObject managedObject)
+        void IManager.AddManaged(ManagedObject managedObject)
         {
             AddManagedObject(managedObject);
         }
 
-        public void DestroyManagedObject(ManagedObject managedObject)
+        void IManager<GameObject>.AddManaged(GameObject gameObject)
         {
-            if(!LockObjLists)
-            {
+            gameObjects.Add(gameObject);
+            AddManagedObject(gameObject);
+        }
+
+        private void DeleteManagedObject(ManagedObject managedObject)
+        {
+            if(!lockObjLists)
                 managedObjects.Remove(managedObject);
-                managedObject.InternalDestroy();
-            }
             else
-            {
                 managedObjectsToRemove.Add(managedObject);
-            }
+        }
+
+        void IManager.DeleteManaged<T>(T managedObject)
+        {
+            DeleteManagedObject(managedObject);
+        }
+
+        void IManager<GameObject>.DeleteManaged(GameObject gameObject)
+        {
+            gameObjects.Remove(gameObject);
+            DeleteManagedObject(gameObject);
         }
 
         protected override void Initialize()
@@ -166,12 +165,12 @@ namespace Engine
 
         private void Iterate(Action<ManagedObject> action)
         {
-            LockObjLists = true;
+            lockObjLists = true;
             foreach (ManagedObject managedObject in managedObjects)
             {
                 action(managedObject);
             }
-            LockObjLists = false;
+            lockObjLists = false;
 
             foreach (var managed in managedObjectsToAdd)
             {
@@ -180,7 +179,7 @@ namespace Engine
             managedObjectsToAdd.Clear();
             foreach (var managed in managedObjectsToRemove)
             {
-                DestroyManagedObject(managed);
+                DeleteManagedObject(managed);
             }
             managedObjectsToRemove.Clear();
         }

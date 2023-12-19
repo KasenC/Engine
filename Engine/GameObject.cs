@@ -7,7 +7,7 @@ namespace Engine
 {
 
 
-    public class GameObject : ScriptableObject<GameObject>
+    public class GameObject : ScriptableObject
     {
         public bool visible = true, drawUsesWorldPos = true;
         public Vector2 Center = new();
@@ -273,10 +273,22 @@ namespace Engine
             get => new(_children);
         }
 
-        public GameObject(IGameObjectManager engine, GameObject parent = null, float updateOrder = 0f):base(engine, updateOrder)
+        /// <param name="updateOrder">If not given and parent is non-null, will default to parent's updateOrder.
+        /// Objects with same updateOrder will update in the order of their creation</param>
+        public GameObject(IManager engine, GameObject parent = null, float? updateOrder = null)
+            : base(engine, updateOrder ?? parent?.updateOrder ?? 0f)
         {
-            engine.AddGameObject(this);
             parent?.AddChild(this);
+        }
+
+        private protected override void AddToManager()
+        {
+            manager.AddManaged(this);
+        }
+
+        private protected override void DeleteFromManager()
+        {
+            manager.DeleteManaged(this);
         }
 
         internal void AddChild(GameObject child)
@@ -311,9 +323,9 @@ namespace Engine
             CenterPos = center;
         }
 
-        internal override void InternalDestroy()
+        internal override void InternalOnDestroy()
         {
-            base.InternalDestroy();
+            base.InternalOnDestroy();
             foreach (var child in Children)
                 RemoveChild(child);
             Parent?.RemoveChild(this);
